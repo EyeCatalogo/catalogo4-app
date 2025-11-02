@@ -5,24 +5,22 @@ import pandas as pd
 import tempfile
 import requests
 from io import BytesIO
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image, PageBreak, Frame, PageTemplate
+from datetime import datetime
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image, PageBreak
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import cm
 from reportlab.lib import colors
-from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import A4
 
-st.set_page_config(page_title="Catálogo de Productos", page_icon="📦")
-st.title("📊 Catálogo de Productos desde Google Sheets")
+st.set_page_config(page_title="Catálogo Premium", page_icon="📦")
+st.title("📊 Catálogo Premium de Productos desde Google Sheets")
 
 uploaded_file = st.file_uploader("Sube tu archivo de credenciales (.json)", type="json")
 
 # --- Función para cargar los datos ---
 def cargar_datos(credenciales):
     try:
-        scope = [
-            "https://spreadsheets.google.com/feeds",
-            "https://www.googleapis.com/auth/drive"
-        ]
+        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
         with tempfile.NamedTemporaryFile(delete=False, suffix=".json") as temp:
             temp.write(credenciales.read())
             temp_path = temp.name
@@ -33,7 +31,17 @@ def cargar_datos(credenciales):
         sheet = client.open("Catalogo").sheet1
         data = sheet.get_all_records()
 
-        return pd.DataFrame(data)
+        df = pd.DataFrame(data)
+
+        # --- Corregir columna 'categoria' ---
+        if "categoria" in df.columns:
+            df["categoria"] = df["categoria"].fillna(df.get("Categoria", "Sin categoría"))
+        elif "Categoria" in df.columns:
+            df["categoria"] = df["Categoria"].fillna("Sin categoría")
+        else:
+            df["categoria"] = "Sin categoría"
+
+        return df
 
     except Exception as e:
         st.error(f"🚫 Error al conectar con Google Sheets: {e}")
@@ -52,42 +60,36 @@ if uploaded_file is not None:
 else:
     st.info("🔹 Sube tu archivo de credenciales JSON para comenzar.")
 
-# --- Función para pie de página ---
-def agregar_pie(canvas, doc):
-    canvas.saveState()
+# --- Función para agregar número de página ---
+def add_page_number(canvas, doc):
     page_num = canvas.getPageNumber()
-    canvas.setFont('Helvetica', 8)
-    canvas.drawRightString(20*cm, 1*cm, f"Página {page_num}")
-    canvas.restoreState()
+    text = f"Página {page_num}"
+    canvas.setFont("Helvetica", 8)
+    canvas.drawRightString(A4[0] - 2*cm, 1*cm, text)
 
-# --- Función para generar PDF avanzado ---
-def generar_catalogo_pdf_avanzado(dataframe, logo_path=None):
+# --- Función para generar PDF premium ---
+def generar_catalogo_premium_pdf(df):
     buffer = BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize="A4", rightMargin=2*cm, leftMargin=2*cm, topMargin=2*cm, bottomMargin=2*cm)
-    
-    styles = getSampleStyleSheet()
-    styles.add(ParagraphStyle(name="ProductoTitulo", fontSize=12, leading=14, spaceAfter=4, alignment=1, textColor=colors.HexColor("#2E4053")))
-    styles.add(ParagraphStyle(name="ProductoTexto", fontSize=10, leading=12, spaceAfter=2))
-    styles.add(ParagraphStyle(name="CategoriaTitulo", fontSize=14, leading=16, spaceAfter=6, textColor=colors.white, backColor=colors.HexColor("#2E86C1"), alignment=1))
-
+    doc = SimpleDocTemplate(buffer, pagesize=A4)
     story = []
 
+    styles = getSampleStyleSheet()
+    styles.add(ParagraphStyle(name="TituloPrincipal", fontSize=24, leading=28, alignment=1, spaceAfter=20))
+    styles.add(ParagraphStyle(name="ProductoTitulo", fontSize=12, leading=14, alignment=1, textColor=colors.HexColor("#2E4053")))
+    styles.add(ParagraphStyle(name="ProductoTexto", fontSize=10, leading=12, alignment=1))
+
     # --- Portada ---
-    if logo_path:
-        story.append(Image(logo_path, width=6*cm, height=6*cm))
-    story.append(Spacer(1, 1*cm))
-    story.append(Paragraph("📦 Catálogo de Productos", styles['Title']))
-    story.append(Spacer(1, 0.5*cm))
-    story.append(Paragraph(f"Fecha: 02/11/2025", styles['Normal']))
+    story.append(Spacer(1, 5*cm))
+    story.append(Paragraph("📦 Catálogo de Productos Premium", styles["TituloPrincipal"]))
+    story.append(Paragraph(f"Fecha: {datetime.today().strftime('%d/%m/%Y')}", styles["ProductoTexto"]))
     story.append(PageBreak())
 
     # --- Agrupar por categoría ---
-    categorias = dataframe['categoria'].dropna().unique()
+    categorias = df['categoria'].unique()
     for cat in categorias:
-        cat_data = dataframe[dataframe['categoria'] == cat]
-        story.append(Paragraph(cat, styles["CategoriaTitulo"]))
-        story.append(Spacer(1, 0.3*cm))
-
+        cat_data = df[df['categoria'] == cat]
+        story.append(Paragraph(f"Categoría: {cat}", ParagraphStyle(name="CategoriaTitulo", fontSize=16, leading=20, textColor=colors.white, backColor=colors.HexColor("#2E86C1"), alignment=0, spaceAfter=12, spaceBefore=12)))
+        
         productos_por_fila = 2
         filas_por_pagina = 3
         productos_por_pagina = productos_por_fila * filas_por_pagina
@@ -98,51 +100,58 @@ def generar_catalogo_pdf_avanzado(dataframe, logo_path=None):
             fila = []
 
             for _, row in page_data.iterrows():
-                nombre = str(row.get("nombre", row.get("Nombre", "")))
-                precio = str(row.get("precio", row.get("Precio", "")))
-                stock = str(row.get("stock", row.get("Stock", "")))
-                imagen_url = row.get("imagen", row.get("Imagen", ""))
+                nombre = str(row.get("nombre", row.get("Nombre", ""))) or "N/A"
+                categoria = str(row.get("categoria", row.get("Categoria", ""))) or "N/A"
+                precio = str(row.get("precio", row.get("Precio", ""))) or "N/A"
+                stock = str(row.get("stock", row.get("Stock", ""))) or "N/A"
+                imagen_url = str(row.get("imagen", row.get("Imagen", ""))) or ""
 
                 # --- Descargar imagen ---
-                try:
-                    imagen_url = str(imagen_url).strip()
-                    if not imagen_url or imagen_url == "nan":
-                        raise ValueError("URL vacía")
-                    if "drive.google.com" in imagen_url:
-                        if "/d/" in imagen_url:
-                            file_id = imagen_url.split("/d/")[1].split("/")[0]
-                        elif "id=" in imagen_url:
-                            file_id = imagen_url.split("id=")[1].split("&")[0]
-                        else:
-                            file_id = ""
-                        if file_id:
-                            imagen_url = f"https://drive.google.com/uc?export=view&id={file_id}"
-
-                    response = requests.get(imagen_url, timeout=10)
-                    if response.status_code == 200:
-                        img_data = BytesIO(response.content)
-                        img = Image(img_data, width=5*cm, height=5*cm)
-                    else:
-                        raise ValueError("No se pudo descargar la imagen")
-                except Exception:
-                    # Placeholder
-                    placeholder = Table([[Paragraph("Imagen no disponible", styles["ProductoTexto"])]], colWidths=[5*cm], rowHeights=[5*cm])
-                    placeholder.setStyle(TableStyle([
+                if imagen_url.lower() in ["", "nan"]:
+                    img = Table([[Paragraph("Imagen no disponible", styles["ProductoTexto"])]],
+                                colWidths=[5*cm], rowHeights=[5*cm])
+                    img.setStyle(TableStyle([
                         ("BACKGROUND", (0,0), (-1,-1), colors.lightgrey),
                         ("ALIGN", (0,0), (-1,-1), "CENTER"),
                         ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
                         ("BOX", (0,0), (-1,-1), 0.25, colors.grey),
                     ]))
-                    img = placeholder
+                else:
+                    try:
+                        if "drive.google.com" in imagen_url:
+                            if "/d/" in imagen_url:
+                                file_id = imagen_url.split("/d/")[1].split("/")[0]
+                            elif "id=" in imagen_url:
+                                file_id = imagen_url.split("id=")[1].split("&")[0]
+                            else:
+                                file_id = ""
+                            if file_id:
+                                imagen_url = f"https://drive.google.com/uc?export=view&id={file_id}"
+                        response = requests.get(imagen_url, timeout=10)
+                        if response.status_code == 200:
+                            img_data = BytesIO(response.content)
+                            img = Image(img_data, width=5*cm, height=5*cm)
+                        else:
+                            raise ValueError("No se pudo descargar la imagen")
+                    except Exception:
+                        img = Table([[Paragraph("Imagen no disponible", styles["ProductoTexto"])]],
+                                    colWidths=[5*cm], rowHeights=[5*cm])
+                        img.setStyle(TableStyle([
+                            ("BACKGROUND", (0,0), (-1,-1), colors.lightgrey),
+                            ("ALIGN", (0,0), (-1,-1), "CENTER"),
+                            ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+                            ("BOX", (0,0), (-1,-1), 0.25, colors.grey),
+                        ]))
 
                 ficha = [
                     img,
                     Paragraph(f"<b>{nombre}</b>", styles["ProductoTitulo"]),
+                    Paragraph(f"Categoría: {categoria}", styles["ProductoTexto"]),
                     Paragraph(f"Precio: ${precio}", styles["ProductoTexto"]),
-                    Paragraph(f"Stock: {stock}", styles["ProductoTexto"])
+                    Paragraph(f"Stock: {stock}", styles["ProductoTexto"]),
                 ]
 
-                ficha_table = Table([[ficha[0]], [ficha[1]], [ficha[2]], [ficha[3]]])
+                ficha_table = Table([[ficha[0]], [ficha[1]], [ficha[2]], [ficha[3]], [ficha[4]]])
                 ficha_table.setStyle(TableStyle([
                     ("ALIGN", (0,0), (-1,-1), "CENTER"),
                     ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
@@ -155,8 +164,15 @@ def generar_catalogo_pdf_avanzado(dataframe, logo_path=None):
                 if len(fila) == productos_por_fila:
                     celdas.append(fila)
                     fila = []
+
             if fila:
                 celdas.append(fila)
+
+            # Validación de celdas vacías
+            for fila_idx, fila_val in enumerate(celdas):
+                for col_idx, celda in enumerate(fila_val):
+                    if celda is None:
+                        celdas[fila_idx][col_idx] = Paragraph("N/A", styles["ProductoTexto"])
 
             tabla = Table(celdas, colWidths=[9*cm]*productos_por_fila)
             tabla.setStyle(TableStyle([
@@ -166,24 +182,25 @@ def generar_catalogo_pdf_avanzado(dataframe, logo_path=None):
                 ("BOTTOMPADDING", (0,0), (-1,-1), 10),
             ]))
             story.append(tabla)
-            story.append(Spacer(1, 0.5*cm))
+            story.append(Spacer(1, 1*cm))
+
         story.append(PageBreak())
 
-    doc.build(story, onLaterPages=agregar_pie)
+    doc.build(story, onFirstPage=add_page_number, onLaterPages=add_page_number)
     buffer.seek(0)
     return buffer
 
-# --- Botón de Streamlit ---
+# --- Botón para generar PDF premium ---
 if "df" in st.session_state:
     df = st.session_state["df"]
 
-    st.subheader("📄 Generar catálogo profesional PDF")
-    if st.button("📘 Generar Catálogo Avanzado"):
-        pdf_buffer = generar_catalogo_pdf_avanzado(df)
-        st.success("Catálogo profesional generado ✅")
+    st.subheader("📄 Generar catálogo Premium PDF")
+    if st.button("📘 Generar Catálogo Premium PDF"):
+        pdf_buffer = generar_catalogo_premium_pdf(df)
+        st.success("Catálogo generado correctamente ✅")
         st.download_button(
-            label="⬇️ Descargar Catálogo",
+            label="⬇️ Descargar Catálogo Premium",
             data=pdf_buffer,
-            file_name="catalogo_profesional.pdf",
+            file_name="catalogo_premium.pdf",
             mime="application/pdf"
         )
